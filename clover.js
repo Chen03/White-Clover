@@ -1,8 +1,3 @@
-/**
- * @param {(value) => void} res 
- * @param {(error) => void} rej 
- * @param {*} val 
- */
 function ThenItem(onFulfilled, onRejected, resolve, reject, clover) {
     this.onFulfilled = onFulfilled;
     this.onRejected = onRejected;
@@ -15,24 +10,34 @@ function PRP(retVal, resolve, reject, clover) {
     if (retVal === clover)    reject(TypeError("Callback returned the promise itself."));
     else if (retVal instanceof Promise || retVal instanceof Clover) {   //232?  not sure
         retVal.then(
-            (val) => resolve(val), 
+            (val) => PRP(val, resolve, reject, clover),
             (err) => reject(err)
         );
-    } else if (retVal && (retVal instanceof Object || retVal instanceof Function)) {
-        if (!retVal.then instanceof Function)   resolve(retVal);
+    } else if (retVal && (typeof retVal === 'object' || typeof retVal === 'function')) {
+        let thenFunc;
+        try { 
+            thenFunc = retVal.then;
+        } catch (e) {
+            reject(e);
+        }
+
+        if (typeof thenFunc !== 'function')   resolve(retVal);
         else {
             let isCalled = false;
             const resolvePromise = (value) => {
                 if (!isCalled) {
-                    resolve(value);
+                    PRP(value, resolve, reject, clover);
+                    isCalled = true;
                 }
             }, rejectPromise = (error) => {
-                if (isCalled)   return;
-                reject(error);
+                if (!isCalled) {
+                    reject(error);
+                    isCalled = true;
+                }
             };
 
             try {
-                retVal.then(resolvePromise, rejectPromise);
+                thenFunc.call(retVal, resolvePromise, rejectPromise);
             } catch (e) {
                 !isCalled && rejectPromise(e);
             }
@@ -50,15 +55,18 @@ function Clover(callback) {
 
     const executeThenItem = (t) => 
         queueMicrotask(() => {  //224
-            let retVal;
-            try {
-                retVal = state == 1 ? 
-                    t.onFulfilled(val) : t.onRejected(val);
-            } catch (e) {
-                t.reject(e);
+            if (!((state == 1 ? t.onFulfilled : t.onRejected) instanceof Function))
+                state == 1 ? t.resolve(val) : t.reject(val);
+            else {
+                let retVal;
+                try {
+                    retVal = (state == 1 ? t.onFulfilled : t.onRejected).call(undefined, val);
+                } catch (e) {
+                    t.reject(e);
+                }
+    
+                PRP(retVal, t.resolve, t.reject, t.clover);
             }
-
-            PRP(retVal, t.resolve, t.reject, t.clover);
         });
 
     this.then = (onFulfilled, onRejected) => {
@@ -81,17 +89,14 @@ function Clover(callback) {
     }
 
     callback(
-        (value) => {
-            state = 1;
-            val = value;
-            executeThenList();
-        },
-        (error) => {
-            state = 2;
-            val = error;
-            executeThenList();
-        }
+        (value) => 
+            !state && (state = 1, val = value, executeThenList()),
+        (error) =>
+            !state && (state = 2, val = error, executeThenList()),
     );
 }
+
+Clover.resolve = (val) => new Clover((res) => res(val));
+Clover.reject = (err) => new Clover((_, rej) => rej(err));
 
 exports.Clover = Clover;
